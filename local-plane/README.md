@@ -26,3 +26,11 @@ The dashboard address is printed on startup. A profile's optional database-url f
 sets DATABASE_URL and RAILS_ENV=test for that runner. Use a dedicated database and
 test data. Review tracked files and integrations before authorizing a repo for
 unattended use. To add another repository repeat connect and up with another name.
+
+At connection time the launcher compares the local commit to the Git remote's
+default branch. Matching commits use GitHub draft PRs. If they differ, a new card
+clones the named local branch from its latest committed tip, removes its remote
+and leaves a review commit in the card workspace. The card links the work by
+workspace path and commit; use `git fetch /path/to/card-workspace symphony/PL-2`
+and inspect FETCH_HEAD. Done retains these local workspaces. Uncommitted changes
+in the source checkout are excluded.

@@ -164,17 +164,17 @@ defmodule SymphonyElixir.Plane.Adapter do
 
   defp valid_url?(_uri), do: false
 
-  defp pages(conn, path, params, seen \\ MapSet.new(), acc \\ []) do
+  defp pages(conn, path, params, seen \\ %{}, acc \\ []) do
     case request(conn, :get, path, params: params) do
       {:ok, %{"results" => rows, "next_page_results" => false}} when is_list(rows) ->
         {:ok, Enum.reverse([rows | acc]) |> List.flatten()}
 
       {:ok, %{"results" => rows, "next_page_results" => true, "next_cursor" => cursor}}
       when is_list(rows) and is_binary(cursor) ->
-        if MapSet.member?(seen, cursor) do
+        if Map.has_key?(seen, cursor) do
           {:error, :repeated_plane_cursor}
         else
-          pages(conn, path, Keyword.put(params, :cursor, cursor), MapSet.put(seen, cursor), [rows | acc])
+          pages(conn, path, Keyword.put(params, :cursor, cursor), Map.put(seen, cursor, true), [rows | acc])
         end
 
       {:ok, _} ->

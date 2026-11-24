@@ -44,12 +44,32 @@ def wait_for(url, process=None):
     raise SystemExit(f"Timed out waiting for {url}")
 
 
+def checkout_plan(repo):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", repo, *args], text=True).strip()
+
+    remote = git("remote", "get-url", "origin")
+    published = git("ls-remote", remote, "HEAD").split()
+    if published and published[0] == git("rev-parse", "HEAD"):
+        hook = ('set -eu\ngit clone -- ' + shlex.quote(remote) + ' .\n'
+                'branch="symphony/$(basename "$PWD")"\n'
+                'if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then\n'
+                '  git switch --track "origin/$branch"\nelse\n  git switch -c "$branch"\nfi')
+        return hook, "github"
+
+    branch = git("symbolic-ref", "--short", "HEAD")
+    hook = ('set -eu\ngit clone --single-branch --branch ' + shlex.quote(branch) + ' -- '
+            + shlex.quote(str(repo.resolve())) + ' .\ngit remote remove origin\n'
+            + 'git switch -c "symphony/$(basename "$PWD")"')
+    return hook, "local"
+
+
 def setup(profile, repo):
     if alive(profile):
         raise SystemExit("Drain this profile before reconfiguring it.")
     if (profile / "WORKFLOW.md").exists():
         raise SystemExit("Profile already connected. Edit its WORKFLOW.md to change configuration.")
-    remote = subprocess.check_output(["git", "-C", repo, "remote", "get-url", "origin"], text=True).strip()
+    hook, review_mode = checkout_plan(repo)
     slug = input("Plane workspace slug: ").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]+", slug):
         raise SystemExit("Invalid workspace slug")
@@ -74,12 +94,8 @@ def setup(profile, repo):
         port = 4100
         while port in assigned:
             port += 1
-    hook = ('set -eu\ngit clone -- ' + shlex.quote(remote) + ' .\n'
-            'branch="symphony/$(basename "$PWD")"\n'
-            'if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then\n'
-            '  git switch --track "origin/$branch"\nelse\n  git switch -c "$branch"\nfi')
     config = {"tracker": {"kind": "plane", "provider": {"url": PLANE, "workspace": slug, "project_id": project},
-                          "active_states": ["Ready", "In progress"], "terminal_states": ["Done"]},
+                          "active_states": ["Ready", "In progress"], "terminal_states": ["Done"] if review_mode == "github" else ["Cancelled"]},
               "workspace": {"root": str(ROOT / "workspaces" / profile.name)},
               "hooks": {"after_create": hook, "timeout_ms": 180000},
               "agent": {"max_concurrent_agents": 1},
@@ -88,8 +104,8 @@ def setup(profile, repo):
                         {"type": "workspaceWrite", "networkAccess": True}}}
     (profile / "port").write_text(str(port))
     (profile / "key").write_text(token)
-    (profile / "WORKFLOW.md").write_text("---\n" + json.dumps(config) + "\n---\n" + (SOURCE / "workflow.md").read_text())
-    print(f"Configured {profile.name}. Start with ./up {profile.name}")
+    (profile / "WORKFLOW.md").write_text("---\n" + json.dumps(config) + "\n---\n" + (SOURCE / "workflow.md").read_text().replace("{{HANDOFF}}", (SOURCE / f"review-{review_mode}.md").read_text()))
+    print(f"Configured {profile.name} for {review_mode} review. Start with ./up {profile.name}")
 
 
 def alive(profile):
