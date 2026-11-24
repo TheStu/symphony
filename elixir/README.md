@@ -403,3 +403,14 @@ you.
 ## License
 
 This project is licensed under the [Apache License 2.0](../LICENSE).
+
+### Plane Community Edition
+
+The Plane adapter uses the project-scoped v1 API. Configure `tracker.kind: plane` and
+`tracker.provider` with `url`, `workspace` (slug), and `project_id` (UUID).
+Provide the personal access token in the host's `PLANE_API_KEY` environment variable.
+`plane_card` lets the agent read comments, post a comment and change the state of
+its current issue, with the token held by Symphony. Work item and comment reads
+follow cursor pagination. Use active states Ready and In progress and terminal
+state Done. Review and Blocked are inactive, preserving the workspace for revision.
+See [the local setup](../local-plane/README.md) for the Docker and WSL launchers.

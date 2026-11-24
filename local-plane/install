@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Install the pinned upstream Compose stack and link the local WSL launchers."""
+import os
+from pathlib import Path
+import re
+import secrets
+from urllib.request import urlopen
+
+release = "v1.5.0"
+assets = "https://github.com/makeplane/plane/releases/download/" + release + "/"
+root = Path(os.environ.get("AGENT_WORKSPACE", Path.home() / "dev/agent-workspace"))
+plane = root / "plane"
+os.umask(0o077)
+plane.mkdir(parents=True, exist_ok=True)
+if not (plane / ".env").exists():
+    template = urlopen(assets + "variables.env", timeout=45).read().decode()
+    values = {"APP_RELEASE": release, "WEB_URL": "http://localhost:8090", "CORS_ALLOWED_ORIGINS": "http://localhost:8090",
+              "DATABASE_URL": "postgresql://plane:${POSTGRES_PASSWORD}@plane-db/plane",
+              "AMQP_URL": "amqp://plane:${RABBITMQ_PASSWORD}@plane-mq:5672/plane"}
+    for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "SECRET_KEY", "LIVE_SERVER_SECRET_KEY", "POSTGRES_PASSWORD", "RABBITMQ_PASSWORD"]:
+        values[key] = secrets.token_hex(10 if key == "AWS_ACCESS_KEY_ID" else 32)
+    for key, value in values.items():
+        template, count = re.subn("^" + key + "=.*$", key + "=" + value, template, flags=re.M)
+        if count != 1:
+            raise RuntimeError("Unexpected upstream variable: " + key)
+    (plane / ".env").write_text(template)
+if not (plane / "compose.yml").exists():
+    compose = urlopen(assets + "docker-compose.yml", timeout=45).read().decode()
+    start = compose.index("    ports:\n", compose.index("  proxy:\n"))
+    end = compose.index("    volumes:", start)
+    (plane / "compose.yml").write_text(compose[:start] + '    ports:\n      - "127.0.0.1:8090:80"\n' + compose[end:])
+for name in ("up", "down", "board"):
+    target = Path(__file__).resolve().parent / name
+    dest = root / name
+    if dest.resolve() != target:
+        dest.symlink_to(target)
+print(f"Installed in {root}. Run ./up there to open Plane.")

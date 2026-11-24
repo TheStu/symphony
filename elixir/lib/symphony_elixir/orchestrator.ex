@@ -1367,6 +1367,21 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp available_slots(%State{} = state) do
+    if drain_requested?() do
+      0
+    else
+      worker_slots(state)
+    end
+  end
+
+  defp drain_requested? do
+    case System.get_env("SYMPHONY_DRAIN_FILE") do
+      nil -> false
+      path -> File.exists?(path)
+    end
+  end
+
+  defp worker_slots(state) do
     max(
       (state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents) -
         map_size(state.running),

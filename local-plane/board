@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""One local Plane installation, one Symphony process per repository profile."""
+import argparse
+import fcntl
+import getpass
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+from uuid import UUID
+
+ROOT = Path(os.environ.get("AGENT_WORKSPACE", Path.home() / "dev/agent-workspace")).resolve()
+SOURCE = Path(__file__).resolve().parent
+PLANE = "http://localhost:8090"
+COMPOSE = ["docker", "compose", "--project-directory", str(ROOT / "plane"), "-p", "local-plane"]
+os.umask(0o077)
+
+
+def api(url, token=None, body=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-API-Key"] = token
+    request = Request(url, headers=headers, data=json.dumps(body).encode() if body is not None else None)
+    with urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def wait_for(url, process=None):
+    for _ in range(120):
+        if process and process.poll() is not None:
+            raise SystemExit("Runner exited during startup. See runner.log in its profile.")
+        try:
+            return api(url)
+        except (URLError, TimeoutError, ValueError):
+            time.sleep(1)
+    raise SystemExit(f"Timed out waiting for {url}")
+
+
+def setup(profile, repo):
+    if alive(profile):
+        raise SystemExit("Drain this profile before reconfiguring it.")
+    if (profile / "WORKFLOW.md").exists():
+        raise SystemExit("Profile already connected. Edit its WORKFLOW.md to change configuration.")
+    remote = subprocess.check_output(["git", "-C", repo, "remote", "get-url", "origin"], text=True).strip()
+    slug = input("Plane workspace slug: ").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", slug):
+        raise SystemExit("Invalid workspace slug")
+    project = str(UUID(input("Plane project UUID (from its URL): ").strip()))
+    token = getpass.getpass("Plane API key (hidden): ").strip()
+    states_url = f"{PLANE}/api/v1/workspaces/{slug}/projects/{project}/states/"
+    response = api(states_url, token)
+    states = {s["name"].casefold() for s in response["results"]}
+    while response.get("next_page_results"):
+        response = api(states_url + "?cursor=" + quote(response["next_cursor"], safe=""), token)
+        states.update(s["name"].casefold() for s in response["results"])
+    for name, group, color in [("Ready", "unstarted", "#339af0"), ("In progress", "started", "#7950f2"),
+                               ("Review", "started", "#e67700"), ("Blocked", "started", "#e03131"),
+                               ("Done", "completed", "#2b8a3e")]:
+        if name.casefold() not in states:
+            api(states_url, token, {"name": name, "group": group, "color": color})
+    # The JSON header is valid YAML. Secrets are only in the private profile.
+    if (profile / "port").exists():
+        port = int((profile / "port").read_text())
+    else:
+        assigned = {int(p.read_text()) for p in profile.parent.glob("*/port")}
+        port = 4100
+        while port in assigned:
+            port += 1
+    hook = ('set -eu\ngit clone -- ' + shlex.quote(remote) + ' .\n'
+            'branch="symphony/$(basename "$PWD")"\n'
+            'if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then\n'
+            '  git switch --track "origin/$branch"\nelse\n  git switch -c "$branch"\nfi')
+    config = {"tracker": {"kind": "plane", "provider": {"url": PLANE, "workspace": slug, "project_id": project},
+                          "active_states": ["Ready", "In progress"], "terminal_states": ["Done"]},
+              "workspace": {"root": str(ROOT / "workspaces" / profile.name)},
+              "hooks": {"after_create": hook, "timeout_ms": 180000},
+              "agent": {"max_concurrent_agents": 1},
+              "server": {"port": port, "host": "127.0.0.1"},
+              "codex": {"thread_sandbox": "workspace-write", "turn_sandbox_policy":
+                        {"type": "workspaceWrite", "networkAccess": True}}}
+    (profile / "port").write_text(str(port))
+    (profile / "key").write_text(token)
+    (profile / "WORKFLOW.md").write_text("---\n" + json.dumps(config) + "\n---\n" + (SOURCE / "workflow.md").read_text())
+    print(f"Configured {profile.name}. Start with ./up {profile.name}")
+
+
+def alive(profile):
+    try:
+        pid = int((profile / "pid").read_text())
+        args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.fsencode(profile / "WORKFLOW.md") in args:
+            return pid
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def start(profile):
+    subprocess.run(COMPOSE + ["up", "-d"], check=True)
+    wait_for(PLANE + "/api/instances/")
+    print(f"Plane: {PLANE}", flush=True)
+    if not profile:
+        return
+    if not (profile / "WORKFLOW.md").exists():
+        raise SystemExit(f"First run ./board connect {profile.name} ~/dev/{profile.name}")
+    if alive(profile):
+        print("Runner is already active.")
+        return
+    drain = profile / "drain"
+    drain.unlink(missing_ok=True)
+    env = dict(os.environ, PLANE_API_KEY=(profile / "key").read_text(), SYMPHONY_DRAIN_FILE=str(drain))
+    if (profile / "database-url").exists():
+        env.update(DATABASE_URL=(profile / "database-url").read_text().strip(), RAILS_ENV="test")
+    cmd = [str(SOURCE.parent / "elixir/bin/symphony"), "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
+           "--logs-root", str(profile / "logs"), str(profile / "WORKFLOW.md")]
+    with (profile / "runner.log").open("ab") as log:
+        proc = subprocess.Popen(cmd, env=env, cwd=profile, stdin=subprocess.DEVNULL,
+                                stdout=log, stderr=log, start_new_session=True)
+    (profile / "pid").write_text(str(proc.pid))
+    dashboard = "http://127.0.0.1:" + (profile / "port").read_text()
+    wait_for(dashboard + "/api/v1/state", proc)
+    print(f"Runner: {dashboard}")
+
+
+def stop():
+    profiles = [p for p in (ROOT / "profiles").glob("*") if alive(p)]
+    for p in profiles:
+        (p / "drain").touch()
+    for p in profiles:
+        endpoint = "http://127.0.0.1:" + (p / "port").read_text() + "/api/v1/state"
+        while alive(p):
+            if api(endpoint)["counts"]["running"] == 0:
+                os.kill(alive(p), signal.SIGTERM)
+                break
+            time.sleep(2)
+    subprocess.run(COMPOSE + ["stop"], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    connect = sub.add_parser("connect")
+    connect.add_argument("name")
+    connect.add_argument("repo", type=Path)
+    up = sub.add_parser("up")
+    up.add_argument("name", nargs="?")
+    sub.add_parser("down").add_argument("--drain", action="store_true")
+    args = parser.parse_args()
+    name = getattr(args, "name", None)
+    if name and not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+        parser.error("Invalid profile name")
+    profile = ROOT / "profiles" / name if name else None
+    ROOT.mkdir(exist_ok=True)
+    with (ROOT / "launcher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.command == "connect":
+            profile.mkdir(parents=True, exist_ok=True)
+            setup(profile, args.repo.expanduser())
+        elif args.command == "up":
+            start(profile)
+        else:
+            stop()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, HTTPError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
+        sys.exit(str(exc))
