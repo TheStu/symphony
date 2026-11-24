@@ -30,9 +30,7 @@ unattended use. To add another repository repeat connect and up with another nam
 At connection time the launcher compares the local commit to the Git remote's
 default branch. Matching commits use GitHub draft PRs. If they differ, a new card
 clones the named local branch from its latest committed tip, removes its remote
-and leaves a review commit in the card workspace. The card links the work by
-workspace path and commit; use `git fetch /path/to/card-workspace symphony/PL-2`
-and inspect FETCH_HEAD. Done retains these local workspaces. Uncommitted changes
+and leaves a review commit in the card workspace. The card links the work by workspace path and commit. Done retains these local workspaces. Uncommitted changes
 in the source checkout are excluded.
 
 For visual changes, save PNG screenshots in the card checkout under
@@ -40,3 +38,6 @@ For visual changes, save PNG screenshots in the card checkout under
 the files as Plane attachments and posts an inline gallery in the activity feed.
 Repeated handoffs reuse published screenshots. The local Plane proxy serves
 both the board and its object storage.
+
+Move a reviewed card to **Approved** to authorize its recorded commit for merge.
+The worker merges into the configured local branch or GitHub PR target, posts the verified commit and moves the card to Done. Send design revisions to Ready.

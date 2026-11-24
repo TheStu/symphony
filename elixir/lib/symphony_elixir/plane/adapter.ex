@@ -116,12 +116,28 @@ defmodule SymphonyElixir.Plane.Adapter do
   defp card_action({base, _token} = conn, path, %{"action" => "move", "value" => name} = args, opts) when is_binary(name) do
     provider = opts[:tracker_settings].provider
 
-    with :ok <- publish_review_images(String.downcase(name), provider, opts[:issue], base <> path) do
+    state = name |> String.trim() |> String.downcase()
+
+    with :ok <- prepare_landing(state, provider, opts[:issue], base <> path),
+         :ok <- publish_review_images(state, provider, opts[:issue], base <> path) do
       action(conn, path, args)
     end
   end
 
   defp card_action(conn, path, args, _opts), do: action(conn, path, args)
+
+  defp prepare_landing("approved", %{"landing" => _}, _, _), do: {:error, :approval_requires_reviewer}
+
+  defp prepare_landing(state, %{"landing" => settings}, issue, card_url) when state in ["review", "done"] do
+    args = ["-I", settings["script"], settings["profile"], issue.identifier, card_url, state]
+
+    case System.cmd("python3", args, stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {message, _} -> {:error, {:landing, String.trim(message)}}
+    end
+  end
+
+  defp prepare_landing(_, _, _, _), do: :ok
 
   defp publish_review_images("review", %{"review_image_script" => script, "url" => origin}, issue, card_url) do
     args = ["-I", script, Config.settings!().workspace.root, issue.identifier, card_url, origin]

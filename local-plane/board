@@ -64,6 +64,15 @@ def checkout_plan(repo):
     return hook, "local"
 
 
+def landing_settings(repo, mode, profile):
+    if mode == "local":
+        branch = subprocess.check_output(["git", "-C", repo, "branch", "--show-current"], text=True).strip()
+    else:
+        refs = subprocess.check_output(["git", "-C", repo, "ls-remote", "--symref", "origin", "HEAD"], text=True)
+        branch = next(line.split()[1][len("refs/heads/"):] for line in refs.splitlines() if line.startswith("ref: refs/heads/"))
+    return {"repo": str(repo.resolve()), "mode": mode, "branch": branch, "script": str(SOURCE / "land.py"), "profile": str(profile)}
+
+
 def setup(profile, repo):
     if alive(profile):
         raise SystemExit("Drain this profile before reconfiguring it.")
@@ -82,7 +91,7 @@ def setup(profile, repo):
         response = api(states_url + "?cursor=" + quote(response["next_cursor"], safe=""), token)
         states.update(s["name"].casefold() for s in response["results"])
     for name, group, color in [("Ready", "unstarted", "#339af0"), ("In progress", "started", "#7950f2"),
-                               ("Review", "started", "#e67700"), ("Blocked", "started", "#e03131"),
+                               ("Review", "started", "#e67700"), ("Approved", "started", "#087f5b"), ("Blocked", "started", "#e03131"),
                                ("Done", "completed", "#2b8a3e")]:
         if name.casefold() not in states:
             api(states_url, token, {"name": name, "group": group, "color": color})
@@ -95,8 +104,9 @@ def setup(profile, repo):
         while port in assigned:
             port += 1
     config = {"tracker": {"kind": "plane", "provider": {"url": PLANE, "workspace": slug, "project_id": project,
+                                                    "landing": landing_settings(repo, review_mode, profile),
                                                     "review_image_script": str(SOURCE / "review_images.py")},
-                          "active_states": ["Ready", "In progress"], "terminal_states": ["Done"] if review_mode == "github" else ["Cancelled"]},
+                          "active_states": ["Ready", "In progress", "Approved"], "terminal_states": ["Done"] if review_mode == "github" else ["Cancelled"]},
               "workspace": {"root": str(ROOT / "workspaces" / profile.name)},
               "hooks": {"after_create": hook, "timeout_ms": 180000},
               "agent": {"max_concurrent_agents": 1},
@@ -106,7 +116,7 @@ def setup(profile, repo):
                         {"type": "workspaceWrite", "networkAccess": True}}}
     (profile / "port").write_text(str(port))
     (profile / "key").write_text(token)
-    (profile / "WORKFLOW.md").write_text("---\n" + json.dumps(config) + "\n---\n" + (SOURCE / "workflow.md").read_text().replace("{{HANDOFF}}", (SOURCE / f"review-{review_mode}.md").read_text()))
+    (profile / "WORKFLOW.md").write_text("---\n" + json.dumps(config) + "\n---\n" + (SOURCE / "workflow.md").read_text().replace("{{HANDOFF}}", (SOURCE / f"review-{review_mode}.md").read_text()).replace("{{MERGE_TARGET}}", str(repo.resolve()) + " branch " + config["tracker"]["provider"]["landing"]["branch"]))
     print(f"Configured {profile.name} for {review_mode} review. Start with ./up {profile.name}")
 
 

@@ -27,13 +27,13 @@ class ProfileTest(unittest.TestCase):
                 return {"results": [{"name": "In Progress"}], "next_page_results": True, "next_cursor": "2:4:0"}
 
             setup = board["setup"]
-            with patch.dict(setup.__globals__, {"ROOT": root, "api": fake_api, "checkout_plan": lambda repo: ("git clone sample .", "github")}), \
+            with patch.dict(setup.__globals__, {"ROOT": root, "api": fake_api, "landing_settings": lambda *_: {"branch": "main"}, "checkout_plan": lambda repo: ("git clone sample .", "github")}), \
                     patch("builtins.input", side_effect=["books", "e1344d17-79fe-473b-8131-8428bd5a5651"]), \
                     patch("getpass.getpass", return_value="local-private-key"):
                 setup(profile, root)
                 with self.assertRaisesRegex(SystemExit, "already connected"):
                     setup(profile, root)
-            self.assertEqual(calls, ["Ready", "Review", "Blocked"])
+            self.assertEqual(calls, ["Ready", "Review", "Approved", "Blocked"])
             workflow = (profile / "WORKFLOW.md").read_text()
             config = json.loads(workflow.split("---")[1])
             self.assertEqual(config["workspace"]["root"], str(root / "workspaces/books"))

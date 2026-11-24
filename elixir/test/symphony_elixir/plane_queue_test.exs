@@ -68,6 +68,9 @@ defmodule SymphonyElixir.Plane.QueueTest do
     script = Path.join(Path.dirname(Workflow.workflow_file_path()), "publish.py")
     File.write!(script, "import sys; sys.exit('Image upload failed')")
     provider = %{url: "http://127.0.0.1:#{port}", workspace: "books", project_id: project, review_image_script: script}
+    landing = Path.join(Path.dirname(script), "land.py")
+    File.write!(landing, "import sys; sys.exit('not approved') if sys.argv[-1] == 'done' else None")
+    provider = Map.put(provider, :landing, %{script: landing, profile: Path.dirname(script)})
     settings = %{kind: "plane", provider: provider, active_states: ["Ready", "In progress"], terminal_states: ["Done"]}
     File.write!(Workflow.workflow_file_path(), "---\n" <> Jason.encode!(%{tracker: settings}) <> "\n---\nWork on {{ issue.identifier }}")
     assert :ok = Config.validate!()
@@ -84,6 +87,8 @@ defmodule SymphonyElixir.Plane.QueueTest do
     binding = Tracker.bind_agent_tools()
     assert "PLANE_API_KEY" in binding.secret_environment_names
     call = fn args -> Tracker.execute_bound_agent_tool(binding, "plane_card", args, issue: card) end
+    refute call.(%{"action" => "move", "value" => "Approved"})["success"]
+    refute call.(%{"action" => "move", "value" => "Done"})["success"]
     assert call.(%{"action" => "comment", "value" => "see <draft>"})["success"]
     assert_receive {:comment, %{"comment_html" => "<pre>see &lt;draft&gt;</pre>"}}
     refute call.(%{"action" => "move", "value" => "Review"})["success"]
