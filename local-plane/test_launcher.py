@@ -38,6 +38,8 @@ class ProfileTest(unittest.TestCase):
             config = json.loads(workflow.split("---")[1])
             self.assertEqual(config["workspace"]["root"], str(root / "workspaces/books"))
             self.assertEqual(config["agent"]["max_concurrent_agents"], 1)
+            self.assertEqual(config["codex"]["command"],
+                             "codex app-server -c model=gpt-6.2-sol -c model_reasoning_effort=high")
             self.assertNotIn("local-private-key", workflow)
             self.assertEqual((profile / "key").stat().st_mode & 0o777, 0o600)
 
