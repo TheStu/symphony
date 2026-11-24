@@ -34,3 +34,9 @@ and leaves a review commit in the card workspace. The card links the work by
 workspace path and commit; use `git fetch /path/to/card-workspace symphony/PL-2`
 and inspect FETCH_HEAD. Done retains these local workspaces. Uncommitted changes
 in the source checkout are excluded.
+
+For visual changes, save PNG screenshots in the card checkout under
+`tmp/review/PL-<number>/`. Moving the card to Review via Symphony uploads
+the files as Plane attachments and posts an inline gallery in the activity feed.
+Repeated handoffs reuse published screenshots. The local Plane proxy serves
+both the board and its object storage.

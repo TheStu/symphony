@@ -98,7 +98,7 @@ defmodule SymphonyElixir.Plane.Adapter do
       with "plane_card" <- tool,
            %{id: id} <- opts[:issue],
            {:ok, conn} <- connection(opts[:tracker_settings]) do
-        action(conn, "work-items/#{id}/", args)
+        card_action(conn, "work-items/#{id}/", args, opts)
       else
         _ -> {:error, :invalid_plane_tool_context}
       end
@@ -112,6 +112,27 @@ defmodule SymphonyElixir.Plane.Adapter do
       "contentItems" => [%{"type" => "inputText", "text" => output}]
     }
   end
+
+  defp card_action({base, _token} = conn, path, %{"action" => "move", "value" => name} = args, opts) when is_binary(name) do
+    provider = opts[:tracker_settings].provider
+
+    with :ok <- publish_review_images(String.downcase(name), provider, opts[:issue], base <> path) do
+      action(conn, path, args)
+    end
+  end
+
+  defp card_action(conn, path, args, _opts), do: action(conn, path, args)
+
+  defp publish_review_images("review", %{"review_image_script" => script, "url" => origin}, issue, card_url) do
+    args = ["-I", script, Config.settings!().workspace.root, issue.identifier, card_url, origin]
+
+    case System.cmd("python3", args, stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {message, _} -> {:error, {:review_images, String.trim(message)}}
+    end
+  end
+
+  defp publish_review_images(_, _, _, _), do: :ok
 
   defp action(conn, path, %{"action" => "comments"}), do: pages(conn, path <> "comments/", [])
 

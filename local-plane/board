@@ -94,7 +94,8 @@ def setup(profile, repo):
         port = 4100
         while port in assigned:
             port += 1
-    config = {"tracker": {"kind": "plane", "provider": {"url": PLANE, "workspace": slug, "project_id": project},
+    config = {"tracker": {"kind": "plane", "provider": {"url": PLANE, "workspace": slug, "project_id": project,
+                                                    "review_image_script": str(SOURCE / "review_images.py")},
                           "active_states": ["Ready", "In progress"], "terminal_states": ["Done"] if review_mode == "github" else ["Cancelled"]},
               "workspace": {"root": str(ROOT / "workspaces" / profile.name)},
               "hooks": {"after_create": hook, "timeout_ms": 180000},

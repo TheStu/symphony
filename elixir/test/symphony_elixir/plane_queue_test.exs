@@ -65,7 +65,9 @@ defmodule SymphonyElixir.Plane.QueueTest do
     endpoint = {Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0}
     server = start_supervised!(Supervisor.child_spec(endpoint, id: :plane_api))
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
-    provider = %{url: "http://127.0.0.1:#{port}", workspace: "books", project_id: project}
+    script = Path.join(Path.dirname(Workflow.workflow_file_path()), "publish.py")
+    File.write!(script, "import sys; sys.exit('Image upload failed')")
+    provider = %{url: "http://127.0.0.1:#{port}", workspace: "books", project_id: project, review_image_script: script}
     settings = %{kind: "plane", provider: provider, active_states: ["Ready", "In progress"], terminal_states: ["Done"]}
     File.write!(Workflow.workflow_file_path(), "---\n" <> Jason.encode!(%{tracker: settings}) <> "\n---\nWork on {{ issue.identifier }}")
     assert :ok = Config.validate!()
@@ -84,6 +86,9 @@ defmodule SymphonyElixir.Plane.QueueTest do
     call = fn args -> Tracker.execute_bound_agent_tool(binding, "plane_card", args, issue: card) end
     assert call.(%{"action" => "comment", "value" => "see <draft>"})["success"]
     assert_receive {:comment, %{"comment_html" => "<pre>see &lt;draft&gt;</pre>"}}
+    refute call.(%{"action" => "move", "value" => "Review"})["success"]
+    assert Agent.get(store, & &1) == "Ready"
+    File.write!(script, "import sys; assert sys.argv[2] == 'PL-1' and sys.argv[3].endswith('/work-items/one/')")
     assert call.(%{"action" => "move", "value" => "Review"})["success"]
     assert {:ok, [%Issue{id: "three"}]} = Tracker.fetch_issues_by_states(["Ready"])
     assert {:ok, [%Issue{state: "Review"}]} = Tracker.fetch_issues_by_ids(["one", "missing"])
