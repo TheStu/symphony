@@ -84,7 +84,7 @@ def setup(profile, repo):
               "hooks": {"after_create": hook, "timeout_ms": 180000},
               "agent": {"max_concurrent_agents": 1},
               "server": {"port": port, "host": "127.0.0.1"},
-              "codex": {"thread_sandbox": "workspace-write", "turn_sandbox_policy":
+              "codex": {"approval_policy": "on-request", "thread_sandbox": "workspace-write", "turn_sandbox_policy":
                         {"type": "workspaceWrite", "networkAccess": True}}}
     (profile / "port").write_text(str(port))
     (profile / "key").write_text(token)

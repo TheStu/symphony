@@ -29,6 +29,15 @@ defmodule SymphonyElixir.Plane.QueueTest do
           {"GET", "work-items/one/"} ->
             {200, row.("one", 1, Agent.get(store, & &1))}
 
+          {"GET", "work-items/forbidden/"} ->
+            {403, %{}}
+
+          {"GET", "work-items/broken/comments/"} ->
+            {200, %{}}
+
+          {"GET", "work-items/repeated/comments/"} ->
+            {200, %{"results" => [], "next_page_results" => true, "next_cursor" => "same"}}
+
           {"GET", "work-items/missing/"} ->
             {404, %{}}
 
@@ -53,7 +62,8 @@ defmodule SymphonyElixir.Plane.QueueTest do
       conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.send_resp(status, Jason.encode!(body))
     end
 
-    server = start_supervised!({Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0})
+    endpoint = {Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0}
+    server = start_supervised!(Supervisor.child_spec(endpoint, id: :plane_api))
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
     provider = %{url: "http://127.0.0.1:#{port}", workspace: "books", project_id: project}
     settings = %{kind: "plane", provider: provider, active_states: ["Ready", "In progress"], terminal_states: ["Done"]}
@@ -80,5 +90,19 @@ defmodule SymphonyElixir.Plane.QueueTest do
     Agent.update(store, fn _ -> "Ready" end)
     assert {:ok, [^card]} = Tracker.fetch_issues_by_ids(["one"])
     assert call.(%{"action" => "comments"})["output"] =~ "Revise the mobile layout"
+    refute call.(%{"action" => "move", "value" => "unknown"})["success"]
+    refute call.(%{"action" => "delete"})["success"]
+    assert {:error, {:plane_http, 403}} = Tracker.fetch_issues_by_ids(["forbidden"])
+    assert {:ok, []} = Tracker.fetch_issues_by_states([])
+    assert {:ok, []} = Tracker.fetch_issues_by_ids([])
+
+    for {id, reason} <- [{"broken", "invalid_plane_page"}, {"repeated", "repeated_plane_cursor"}] do
+      result = Tracker.execute_bound_agent_tool(binding, "plane_card", %{"action" => "comments"}, issue: %{card | id: id})
+      refute result["success"]
+      assert result["output"] =~ reason
+    end
+
+    assert :ok = stop_supervised(:plane_api)
+    refute call.(%{"action" => "move", "value" => "Review"})["success"]
   end
 end
